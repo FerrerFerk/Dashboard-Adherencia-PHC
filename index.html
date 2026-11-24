@@ -515,13 +515,36 @@ function detList(){
     if(q&&!(e.pdv.toLowerCase().includes(q)||D.routes[e.ru][0].toLowerCase().includes(q)||D.spocs[e.sp].toLowerCase().includes(q)))return false;return true;
   }).sort((a,b)=>b.day-a.day||D.routes[a.ru][0].localeCompare(D.routes[b.ru][0]));
 }
+function saveBlob(blob,name){
+  const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},1500);
+}
+async function exportXlsx(name,sheet,head,rows,widths){
+  const aoa=[head].concat(rows);
+  let dl=null;try{if(window.claude&&claude.use)dl=await claude.use('downloads')}catch(e){}
+  const hasX=typeof XLSX!=='undefined';
+  let data,ext;
+  if(hasX){
+    const ws=XLSX.utils.aoa_to_sheet(aoa);ws['!cols']=(widths||head.map(()=>18)).map(w=>({wch:w}));ws['!autofilter']={ref:ws['!ref']};
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheet);
+    data=new Blob([XLSX.write(wb,{type:'array',bookType:'xlsx'})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});ext='xlsx';
+  }else if(dl){
+    const q=x=>'"'+String(x==null?'':x).replace(/"/g,'""')+'"';
+    data='\ufeff'+aoa.map(r=>r.map(q).join(',')).join('\r\n');ext='csv';
+  }else{
+    const e=x=>String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    data=new Blob(['\ufeff<html><head><meta charset="utf-8"></head><body><table border="1"><tr>'+head.map(h=>'<th style="background:#1F3864;color:#fff">'+e(h)+'</th>').join('')+'</tr>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+e(c)+'</td>').join('')+'</tr>').join('')+'</table></body></html>'],{type:'application/vnd.ms-excel'});ext='xls';
+  }
+  if(dl){await dl.save({filename:name+'.'+ext,data});return ext}
+  saveBlob(data instanceof Blob?data:new Blob([data]),name+'.'+ext);return ext;
+}
 function renderDet(){
   const L=detList(),shown=L.slice(0,S.dmax);
   const opt=(v,l)=>`<option value="${v}" ${S.dst==v?'selected':''}>${l}</option>`;
   $('#p-det').innerHTML=`<div class="toolbar">
     <div class="f"><label for="dSt">Estatus</label><select id="dSt">${opt('all','Todos')}${opt('efectiva','Efectiva')}${opt('incompleta','Adherente, faltan módulos')}${opt('sinmod','Adherente, módulos sin cargar')}${opt('just','Justificada')}${opt('noreal','No realizada')}${opt('sinid','Sin ID de cuenta')}${opt('fuera','Fuera de PDT')}</select></div>
     <div class="f" style="flex:1;min-width:200px"><label for="dQ">Buscar PDV, ruta o SPOC</label><input type="search" id="dQ" value="${esc(S.dq)}" placeholder="Ej. Walmart, RUTA 11"></div>
-    <button class="btn" id="dCopy">Copiar como CSV</button><span id="dMsg" style="font-size:12px;color:var(--ink2);align-self:center"></span></div>
+    <button class="btn" id="dCopy">Descargar Excel</button><span id="dMsg" style="font-size:12px;color:var(--ink2);align-self:center"></span></div>
   <div class="card"><div style="color:var(--ink2);font-size:13px;margin-bottom:8px">${fmt(L.length)} registros hasta el ${dlab(S.cut)}${L.length>shown.length?`; se muestran ${shown.length}`:''}.</div>
   <div class="tscroll" style="max-height:640px;overflow:auto"><table><thead><tr><th>Ruta</th><th>Fecha</th><th>PDV</th><th>Estatus</th><th>Módulos</th></tr></thead><tbody>${detailRows(shown,true)}</tbody></table></div>
   ${L.length>shown.length?'<p><button class="btn" id="dMore">Mostrar 150 más</button></p>':''}</div>`;
@@ -529,10 +552,10 @@ function renderDet(){
   $('#dQ').oninput=e=>{S.dq=e.target.value;S.dmax=150;renderDet();const i=$('#dQ');i.focus();i.setSelectionRange(i.value.length,i.value.length)};
   const m=$('#dMore');if(m)m.onclick=()=>{S.dmax+=150;renderDet()};
   $('#dCopy').onclick=async()=>{
-    const head='Ruta,SPOC,Fecha,PDV,Estatus,Frentes,Rentas,TouchPoint';
-    const csv=[head].concat(L.map(e=>{const s=status(e),v=(f,r)=>((e.t==0&&!e.ok)||!evl(e)||e.just)?'':f?'Con lectura':r?'Pendiente':'No aplica';
-      return [D.routes[e.ru][0],tcase(D.spocs[e.sp]),D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'-'+String(e.day).padStart(2,'0'),tcase(e.pdv),s[1]+(s[3]?' ('+s[3]+')':''),v(e.F,1),v(e.R,S.mode=='all'||e.aR),v(e.T,S.mode=='all'||e.aT)].map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(',')})).join('\n');
-    try{await navigator.clipboard.writeText(csv);$('#dMsg').textContent='CSV copiado.'}catch(err){$('#dMsg').textContent='No se pudo copiar desde esta vista.'}};
+    const head=['Ruta','SPOC','Fecha','PDV','Estatus','Frentes','Rentas','TouchPoint'];
+    const rows=L.map(e=>{const s=status(e),v=(f,r)=>((e.t==0&&!e.ok)||!evl(e)||e.just)?'':f?'Con lectura':r?'Pendiente':'No aplica';
+      return [D.routes[e.ru][0],tcase(D.spocs[e.sp]),D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'-'+String(e.day).padStart(2,'0'),tcase(e.pdv),s[1]+(s[3]?' ('+s[3]+')':''),v(e.F,1),v(e.R,S.mode=='all'||e.aR),v(e.T,S.mode=='all'||e.aT)]});
+    try{await exportXlsx('Detalle_PDV_fecha_'+D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'_corte_'+S.cut,'Detalle',head,rows,[12,28,12,30,38,14,14,14]);$('#dMsg').textContent=fmt(rows.length)+' registros descargados.'}catch(err){$('#dMsg').textContent=err&&err.code=='declined'?'Descarga cancelada.':'No se pudo descargar el archivo.'}};
 }
 
 
@@ -564,15 +587,15 @@ function renderCal(){
     ${(D.meta.sinCanal?`<div class="hint" style="margin-top:6px">${D.meta.sinCanal} PDV visitados no tienen canal en el PDT; no se pueden evaluar para DPP/HSM.</div>`:'')}</div>
    <div class="card c12"><h2>Por SPOC</h2><div class="tscroll" style="max-height:380px;overflow:auto"><table><thead><tr><th>SPOC</th>${heads}<th class="r">Total</th></tr></thead><tbody>${spRows.map(x=>`<tr><td style="white-space:nowrap">${esc(x.n)}</td>${[1,2,3,4,5,6].map(t=>cell(x.c,t)).join('')}<td class="r num"><b>${x.tot}</b></td></tr>`).join('')||'<tr><td colspan="8" style="padding:14px;color:var(--ink2)">Sin incidencias.</td></tr>'}</tbody></table></div></div>
    <div class="card c12"><h2>Por ruta</h2><div class="hint">De la ruta con más incidencias a la que menos.</div><div class="tscroll" style="max-height:380px;overflow:auto"><table><thead><tr><th>Ruta</th><th>SPOC</th>${heads}<th class="r">Total</th></tr></thead><tbody>${ruRows.map(x=>`<tr><td style="white-space:nowrap"><b>${x.ru<0?'—':esc(D.routes[x.ru][0])}</b></td><td style="white-space:nowrap">${x.ru<0?'Sin ruta en PDT':esc(tcase(D.spocs[D.routes[x.ru][1]]))}</td>${[1,2,3,4,5,6].map(t=>cell(x.c,t)).join('')}<td class="r num"><b>${x.tot}</b></td></tr>`).join('')||'<tr><td colspan="9" style="padding:14px;color:var(--ink2)">Sin incidencias.</td></tr>'}</tbody></table></div></div>
-   <div class="card c12"><div class="toolbar"><div class="f"><label for="qSel">Incidencia</label><select id="qSel"><option value="0">Todas</option>${[1,2,3,4,5,6].map(t=>`<option value="${t}" ${S.qt==t?'selected':''}>${QT[t][0]}</option>`).join('')}</select></div><button class="btn" id="qCopy">Copiar como CSV</button><span id="qMsg" style="font-size:12px;color:var(--ink2);align-self:center"></span></div>
+   <div class="card c12"><div class="toolbar"><div class="f"><label for="qSel">Incidencia</label><select id="qSel"><option value="0">Todas</option>${[1,2,3,4,5,6].map(t=>`<option value="${t}" ${S.qt==t?'selected':''}>${QT[t][0]}</option>`).join('')}</select></div><button class="btn" id="qCopy">Descargar Excel</button><span id="qMsg" style="font-size:12px;color:var(--ink2);align-self:center"></span></div>
     <div style="color:var(--ink2);font-size:13px;margin-bottom:8px">${fmt(list.length)} registros${S.qt?': '+QT[S.qt][1]:''}${list.length>shown.length?'; se muestran '+shown.length:''}.</div>
     <div class="tscroll" style="max-height:560px;overflow:auto"><table><thead><tr><th>SPOC</th><th>Ruta</th><th>Fecha</th><th>PDV</th><th>Incidencia</th><th class="r">Duración / valor</th><th>Horario</th></tr></thead><tbody>${shown.map(r=>`<tr><td style="white-space:nowrap">${esc(qSp(r))}</td><td style="white-space:nowrap"><b>${esc(qRu(r))}</b></td><td class="num" style="white-space:nowrap">${dlab(r.day)}</td><td>${esc(tcase(r.pdv))}</td><td>${pill(r.t==2?'warn':'bad',QT[r.t][0],r.t==2?'▲':'■')}</td><td class="r num">${qVal(r)}</td><td class="num" style="white-space:nowrap">${esc(r.det)}</td></tr>`).join('')||'<tr><td colspan="7" style="padding:14px;color:var(--ink2)">Sin registros con estos filtros.</td></tr>'}</tbody></table></div>
     ${list.length>shown.length?'<p><button class="btn" id="qMore">Mostrar 200 más</button></p>':''}</div></div>`;
   el.querySelectorAll('.qtile').forEach(b=>b.onclick=()=>{const t=+b.dataset.qt;S.qt=S.qt==t?0:t;S.qmax=200;renderCal()});
   $('#qSel').onchange=e=>{S.qt=+e.target.value;S.qmax=200;renderCal()};
   const m=$('#qMore');if(m)m.onclick=()=>{S.qmax+=200;renderCal()};
-  $('#qCopy').onclick=async()=>{const csv=['SPOC,Ruta,Fecha,PDV,Incidencia,Valor,Horario'].concat(list.map(r=>[qSp(r),qRu(r),D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'-'+String(r.day).padStart(2,'0'),tcase(r.pdv),QT[r.t][0],qVal(r),r.det].map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(','))).join('\n');
-    try{await navigator.clipboard.writeText(csv);$('#qMsg').textContent='CSV copiado.'}catch(err){$('#qMsg').textContent='No se pudo copiar desde esta vista.'}};
+  $('#qCopy').onclick=async()=>{const rows=list.map(r=>[qSp(r),qRu(r),D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'-'+String(r.day).padStart(2,'0'),tcase(r.pdv),QT[r.t][0],qVal(r),r.det]);
+    try{await exportXlsx('Calidad_de_visita_'+D.meta.y+'-'+String(D.meta.m).padStart(2,'0')+'_corte_'+S.cut,'Calidad',['SPOC','Ruta','Fecha','PDV','Incidencia','Valor','Horario'],rows,[28,12,12,30,30,16,34]);$('#qMsg').textContent=fmt(rows.length)+' registros descargados.'}catch(err){$('#qMsg').textContent=err&&err.code=='declined'?'Descarga cancelada.':'No se pudo descargar el archivo.'}};
 }
 
 
